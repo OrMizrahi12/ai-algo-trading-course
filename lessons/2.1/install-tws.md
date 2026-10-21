@@ -73,7 +73,8 @@ The installers bring their own Java runtime: you don't need to install Java your
 
 ## 4. If prices are missing or delayed
 
-- Prices on a **dark olive background** are delayed. To get real-time prices in the paper account, share market data
-  from your live account (see `market-data-and-permissions.md`).
+- Prices on a **dark olive background** are delayed (about 15 minutes). That is normal: this course uses the free
+  delayed data and the free price history. Real-time prices are an optional paid add-on (see
+  `market-data-and-permissions.md`, "Optional").
 - "**No market data permissions for IDEALPRO CASH**" on EUR.USD or another currency pair means your account has no
-  Forex trading permission yet. Request it (same file), wait for approval, then log out of TWS and back in.
+  Forex trading permission. You don't need it: this course trades US stocks and ETFs, not forex.
