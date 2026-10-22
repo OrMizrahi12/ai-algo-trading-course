@@ -60,6 +60,8 @@ not forex, so you can skip this.
 
 ### C. What real-time US data costs
 
+This course uses none of these. They are here so you know what real-time data would cost if you ever want it.
+
 | Data | Price (non-professional, per month, 2026-10-21) | What you get |
 |---|---|---|
 | Free delayed data | Free | Delayed quotes, where available (what this course uses) |
