@@ -1,0 +1,25 @@
+[project]
+name = "trading-lab"
+version = "0.1.0"
+description = "Paper-trading-only educational lab for learning strategy research and backtesting."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "exchange-calendars>=4.13.2",
+    "ib-async>=2.1.0",
+    "ibapi",
+    "pandas>=3.0.6",
+    "pyarrow>=26.0.0",
+]
+
+[tool.uv.sources]
+ibapi = { path = "vendor/tws-api-python" }
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]  # connect_test.py at the root is an IB script, not a test
