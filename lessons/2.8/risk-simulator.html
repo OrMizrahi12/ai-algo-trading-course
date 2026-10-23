@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Risk Simulator</title>
+<style>
+  :root {
+    --bg: #0f1216; --panel: #171b21; --line: #2a313b; --text: #e8ecf1; --muted: #9aa5b1;
+    --a: #4cc38a; --b: #f0b429; --c: #ef5350; --accent: #6aa9ff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 18px/1.45 system-ui, -apple-system, "Segoe UI", Ubuntu, sans-serif; }
+  header { padding: 12px 28px 2px; }
+  h1 { margin: 0; font-size: 30px; letter-spacing: .2px; }
+  .sub { color: var(--muted); margin-top: 4px; }
+  main { display: grid; grid-template-columns: 340px 1fr; gap: 18px; padding: 10px 28px 14px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
+  label { display: block; margin: 0 0 10px; color: var(--muted); font-size: 16px; }
+  label b { color: var(--text); font-weight: 600; }
+  .row { display: flex; justify-content: space-between; align-items: baseline; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  input[type=number] { width: 100%; background: #0c0f13; color: var(--text); border: 1px solid var(--line);
+                       border-radius: 8px; padding: 8px 10px; font: inherit; }
+  .risks { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .risk { border-radius: 8px; padding: 6px 8px; border: 1px solid var(--line); background: #0c0f13; }
+  .risk span { display: block; font-size: 13px; color: var(--muted); }
+  .risk input { padding: 4px 6px; }
+  button { width: 100%; margin-top: 6px; padding: 12px; font: 600 18px system-ui, sans-serif; color: #0b0d10;
+           background: var(--accent); border: 0; border-radius: 10px; cursor: pointer; }
+  button.ghost { background: transparent; color: var(--text); border: 1px solid var(--line); }
+  .exp { margin-top: 14px; padding: 12px; border-radius: 10px; background: #0c0f13; border: 1px solid var(--line); }
+  .exp .big { font-size: 26px; font-weight: 700; }
+  .charts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .card h2 { margin: 0 0 6px; font-size: 22px; display: flex; align-items: center; gap: 8px; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+  canvas { width: 100%; height: 230px; display: block; background: #0c0f13; border-radius: 8px;
+           border: 1px solid var(--line); }
+  table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 17px; }
+  td { padding: 4px 2px; border-bottom: 1px solid var(--line); }
+  td:last-child { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .bad { color: var(--c); } .ok { color: var(--a); }
+  footer { color: var(--muted); font-size: 14px; padding: 0 28px 16px; }
+  @media (max-width: 1100px) { main { grid-template-columns: 1fr; } .charts { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Risk Simulator</h1>
+  <div class="sub">The same strategy, three risk sizes. Every path is a possible future made of random wins and losses.</div>
+</header>
+<main>
+  <section class="panel" id="controls">
+    <label><div class="row"><span>Win rate</span><b id="wrv"></b></div>
+      <input type="range" id="wr" min="10" max="90" step="1" value="45"></label>
+    <label><div class="row"><span>Reward : risk (a win pays this many R)</span><b id="rrv"></b></div>
+      <input type="range" id="rr" min="0.2" max="4" step="0.1" value="1.5"></label>
+    <label><div class="row"><span>Trades per path</span><b id="ntv"></b></div>
+      <input type="range" id="nt" min="20" max="500" step="10" value="200"></label>
+    <label><div class="row"><span>Paths (possible futures)</span><b id="npv"></b></div>
+      <input type="range" id="np" min="10" max="500" step="10" value="100"></label>
+    <label>Starting balance (USD)<input type="number" id="bal" value="10000" min="100" step="100"></label>
+    <label>Risk per trade (% of balance)
+      <div class="risks">
+        <div class="risk"><span>A</span><input type="number" id="r1" value="1" min="0.1" max="100" step="0.1"></div>
+        <div class="risk"><span>B</span><input type="number" id="r2" value="5" min="0.1" max="100" step="0.1"></div>
+        <div class="risk"><span>C</span><input type="number" id="r3" value="20" min="0.1" max="100" step="0.1"></div>
+      </div></label>
+    <button id="run">Run again (new random futures)</button>
+    <div class="exp">
+      <div>Expectancy per trade</div>
+      <div class="big" id="expv"></div>
+      <div class="sub" id="expn"></div>
+    </div>
+  </section>
+  <section class="charts" id="charts"></section>
+</main>
+<footer>Educational tool. Wins and losses are drawn at random from the win rate you set; real trading results are not
+random coin flips and past results do not predict future ones. "Ruined" here means the balance fell below half of the
+start at any point.</footer>
+<script>
+const $ = id => document.getElementById(id);
+const COLORS = ['#4cc38a', '#f0b429', '#ef5350'];
+let seed = 20261021;
+function rng() { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; }
+
+function simulate(p, r, rr, n, paths, start) {
+  const curves = [], finals = [], dds = [], streaks = [];
+  let ruined = 0;
+  for (let k = 0; k < paths; k++) {
+    let b = start, peak = start, mdd = 0, s = 0, maxS = 0, hitRuin = false;
+    const c = [b];
+    for (let i = 0; i < n; i++) {
+      const risk = b * r / 100;
+      if (rng() < p) { b += risk * rr; s = 0; } else { b -= risk; s++; maxS = Math.max(maxS, s); }
+      peak = Math.max(peak, b);
+      mdd = Math.max(mdd, (peak - b) / peak);
+      if (b < start / 2) hitRuin = true;
+      c.push(b);
+    }
+    curves.push(c); finals.push(b); dds.push(mdd); streaks.push(maxS);
+    if (hitRuin) ruined++;
+  }
+  const med = a => { const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
+  return { curves, median: med(finals), mdd: med(dds), streak: med(streaks), ruin: ruined / paths,
+           worst: Math.min(...finals), best: Math.max(...finals) };
+}
+
+function money(v) { return (v < 0 ? '-' : '') + 'USD ' + Math.round(Math.abs(v)).toLocaleString('en-US'); }
+
+function draw(canvas, res, start, color) {
+  const dpr = window.devicePixelRatio || 1, w = canvas.clientWidth, h = canvas.clientHeight;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  const g = canvas.getContext('2d'); g.scale(dpr, dpr);
+  // the same scale in every panel: from -95% to x20, start in the middle (log scale)
+  const n = res.curves[0].length - 1, padL = 8, padR = 8, padT = 10, padB = 10;
+  const x = i => padL + (w - padL - padR) * i / n;
+  const lo = start / 20, hi = start * 20, logMin = Math.log10(lo), logMax = Math.log10(hi);
+  const y = v => { const lv = Math.log10(Math.min(hi, Math.max(v, lo)));
+                   return padT + (h - padT - padB) * (1 - (lv - logMin) / (logMax - logMin)); };
+  g.strokeStyle = '#2a313b'; g.lineWidth = 1; g.setLineDash([4, 4]);
+  const marks = [[start * 10, 'x10'], [start * 2, 'x2'], [start, 'start'], [start / 2, '-50%'], [start / 10, '-90%']];
+  marks.forEach(([v]) => { g.beginPath(); g.moveTo(padL, y(v)); g.lineTo(w - padR, y(v)); g.stroke(); });
+  g.setLineDash([]);
+  g.fillStyle = '#9aa5b1'; g.font = '13px system-ui';
+  marks.forEach(([v, t]) => g.fillText(t, padL + 4, y(v) - 4));
+  g.globalAlpha = Math.max(0.08, Math.min(0.5, 12 / res.curves.length));
+  g.strokeStyle = color; g.lineWidth = 1.4;
+  res.curves.forEach(c => { g.beginPath(); c.forEach((v, i) => i ? g.lineTo(x(i), y(v)) : g.moveTo(x(i), y(v))); g.stroke(); });
+  g.globalAlpha = 1;
+}
+
+function render() {
+  const p = +$('wr').value / 100, rr = +$('rr').value, n = +$('nt').value, paths = +$('np').value;
+  const start = Math.max(100, +$('bal').value || 10000);
+  $('wrv').textContent = Math.round(p * 100) + '%'; $('rrv').textContent = rr.toFixed(1) + ' R';
+  $('ntv').textContent = n; $('npv').textContent = paths;
+  const e = p * rr - (1 - p);
+  $('expv').textContent = (e >= 0 ? '+' : '') + e.toFixed(2) + ' R';
+  $('expv').className = 'big ' + (e > 0 ? 'ok' : 'bad');
+  $('expn').textContent = `${Math.round(p * 100)}% x ${rr.toFixed(1)}R  minus  ${Math.round((1 - p) * 100)}% x 1R`;
+  const box = $('charts'); box.innerHTML = '';
+  ['r1', 'r2', 'r3'].forEach((id, k) => {
+    const r = Math.min(100, Math.max(0.1, +$(id).value || 1));
+    const s0 = seed;
+    const res = simulate(p, r, rr, n, paths, start);
+    seed = s0;                                  // the three sizes see the SAME wins and losses
+    const card = document.createElement('div'); card.className = 'panel card';
+    card.innerHTML = `<h2><span class="dot" style="background:${COLORS[k]}"></span>${'ABC'[k]}: risk ${r}% per trade</h2>
+      <canvas></canvas>
+      <table>
+        <tr><td>Median end balance</td><td>${money(res.median)}</td></tr>
+        <tr><td>Median max drawdown</td><td class="${res.mdd > 0.3 ? 'bad' : ''}">${(res.mdd * 100).toFixed(0)}%</td></tr>
+        <tr><td>Median losing streak</td><td>${res.streak} trades</td></tr>
+        <tr><td>Fell below -50%</td><td class="${res.ruin > 0.05 ? 'bad' : 'ok'}">${(res.ruin * 100).toFixed(0)}% of paths</td></tr>
+        <tr><td>Worst path</td><td>${money(res.worst)}</td></tr>
+        <tr><td>Best path</td><td>${money(res.best)}</td></tr>
+      </table>`;
+    box.appendChild(card);
+    draw(card.querySelector('canvas'), res, start, COLORS[k]);
+  });
+  // advance the seed once per render so "Run again" shows new futures
+  for (let i = 0; i < paths * n; i++) rng();
+}
+
+['wr', 'rr', 'nt', 'np', 'bal', 'r1', 'r2', 'r3'].forEach(id => $(id).addEventListener('input', () => {
+  const s = seed; render(); seed = s; }));
+$('run').addEventListener('click', render);
+window.addEventListener('resize', () => { const s = seed; render(); seed = s; });
+render();
+</script>
+</body>
+</html>
