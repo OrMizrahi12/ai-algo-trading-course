@@ -48,6 +48,12 @@ show hidden files.
 You're done when the edit fails with your hook's message, `Blocked: ...`, and the file is unchanged. Your wording and
 Claude's replies will differ from the video; the behaviour is what matters.
 
+## Known issue, fixed in lesson 4.2
+
+The `require_commit.py` Stop hook in this kit is the version built in this lesson. It can keep Claude from stopping
+when it is told to wait, because it does not check `stop_hook_active`. Lesson 4.2 finds and fixes this; its kit has the
+fixed hook (`lessons/4.2/trading-lab/.claude/hooks/require_commit.py`). Use that one in your own lab.
+
 ## Safety
 
 Paper trading only. Educational content, not financial advice. Ports 7496 (TWS) and 4001 (IB Gateway) are Interactive
