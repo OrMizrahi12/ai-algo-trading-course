@@ -1,0 +1,128 @@
+"""A fake ib_async.IB for the live engine tests (grows as the engine does)."""
+
+from types import SimpleNamespace
+
+from ib_async import Event
+
+
+class FakeTrade:
+    """What placeOrder returns: the order plus its status, fills and open/done state."""
+
+    def __init__(self, contract, order):
+        self.contract = contract
+        self.order = order
+        self.orderStatus = SimpleNamespace(status="Submitted", filled=0, remaining=order.totalQuantity, avgFillPrice=0.0)
+        self.fills = []  # SimpleNamespace(execution=SimpleNamespace(time, shares, price))
+
+    def isDone(self):
+        return self.orderStatus.status in ("Filled", "Cancelled", "Inactive")
+
+
+class FakeIB:
+    def __init__(self, accounts=("DU1234567",)):
+        self.accounts = list(accounts)
+        self.connected = False
+        self.connect_args = None
+        self.market_data_type = None
+        self.placed = []  # (contract, order) for every placeOrder
+        self.cancelled = []
+        self._trades = []  # every FakeTrade ever placed (or put there by a test)
+        self.holdings = {}  # symbol -> shares
+        self.net_liquidation = 100_000.0
+        self.next_order_id = 1
+        self.market_price = None  # a marketable limit fills at this price; None = nothing fills
+        self.fill_fraction = 1.0  # share of a marketable order that fills (partial fills)
+        self.fractions = []  # per-order fill shares for the next marketable orders (consumed first)
+        self.slow_cancel = False  # True: a cancel is never confirmed (status stays PendingCancel)
+        self.reject_types = set()  # order types IB rejects, e.g. {"STP"}
+        self.freeze = False  # True: no order ever fills (timeout tests)
+        self.now = None  # time stamped on fills
+        self.errorEvent = Event()
+
+    def connect(self, host, port, clientId=0, **kwargs):
+        self.connected = True
+        self.connect_args = (host, port, clientId, kwargs)
+
+    def disconnect(self):
+        self.connected = False
+
+    def isConnected(self):
+        return self.connected
+
+    def managedAccounts(self):
+        return self.accounts
+
+    def reqMarketDataType(self, kind):
+        self.market_data_type = kind
+
+    def sleep(self, seconds):
+        return True
+
+    def positions(self):
+        return [SimpleNamespace(account=self.accounts[0], contract=SimpleNamespace(symbol=s), position=n, avgCost=0.0)
+                for s, n in self.holdings.items() if n]
+
+    def reqAllOpenOrders(self):
+        return self.openTrades()
+
+    def trades(self):
+        return list(self._trades)
+
+    def openTrades(self):
+        return [t for t in self._trades if not t.isDone()]
+
+    def accountSummary(self, account=""):
+        return [SimpleNamespace(account=self.accounts[0], tag="NetLiquidation", value=str(self.net_liquidation),
+                                currency="USD")]
+
+    def qualifyContracts(self, *contracts):
+        return list(contracts)
+
+    def placeOrder(self, contract, order):
+        if not getattr(order, "orderId", 0):
+            order.orderId = self.next_order_id
+        self.next_order_id = max(self.next_order_id, order.orderId) + 1
+        self.placed.append((contract, order))
+        trade = FakeTrade(contract, order)
+        self._trades.append(trade)
+        if getattr(order, "orderType", "") in self.reject_types:
+            trade.orderStatus.status = "Inactive"
+            return trade
+        self._try_fill(trade)
+        return trade
+
+    def _try_fill(self, trade):
+        order, px = trade.order, self.market_price
+        if self.freeze or px is None or getattr(order, "orderType", "") != "LMT":
+            return
+        crosses = order.lmtPrice >= px if order.action == "BUY" else order.lmtPrice <= px
+        if crosses and not getattr(order, "ocaGroup", ""):  # a resting target is filled by trigger()
+            fraction = self.fractions.pop(0) if self.fractions else self.fill_fraction
+            self._fill(trade, max(1, int(order.totalQuantity * fraction)), px)
+
+    def _fill(self, trade, shares, price):
+        order, st = trade.order, trade.orderStatus
+        shares = min(shares, st.remaining)
+        total = st.filled * st.avgFillPrice + shares * price
+        st.filled += shares
+        st.remaining -= shares
+        st.avgFillPrice = total / st.filled
+        st.status = "Filled" if st.remaining == 0 else "Submitted"
+        sign = 1 if order.action == "BUY" else -1
+        symbol = trade.contract.symbol
+        self.holdings[symbol] = self.holdings.get(symbol, 0) + sign * shares
+        trade.fills.append(SimpleNamespace(execution=SimpleNamespace(time=self.now, shares=shares, price=price)))
+        if st.status == "Filled" and getattr(order, "ocaGroup", ""):  # one-cancels-other
+            for other in self._trades:
+                if other is not trade and getattr(other.order, "ocaGroup", "") == order.ocaGroup and not other.isDone():
+                    other.orderStatus.status = "Cancelled"
+
+    def trigger(self, trade, price):
+        """A resting stop or target gets hit at `price`."""
+        self._fill(trade, trade.orderStatus.remaining, price)
+
+    def cancelOrder(self, order):
+        self.cancelled.append(order)
+        for t in self._trades:
+            if t.order is order or t.order.orderId == order.orderId:
+                t.orderStatus.status = "PendingCancel" if self.slow_cancel else "Cancelled"
