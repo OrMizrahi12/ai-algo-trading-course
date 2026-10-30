@@ -1,0 +1,66 @@
+"""Run the heartbeat on the paper Gateway: `uv run -m desk [--once] [--dry-run]`. Paper trading only."""
+
+import argparse
+import logging
+
+from . import lab  # noqa: F401
+from ib_async import IB, Stock
+from live.broker import Broker, connect_paper
+from live.config import JOURNAL_PATH
+from live.execution import Executor
+from live.feed import BarFeed
+from live.journal import Journal as LabJournal
+from live.risk import Risk
+
+from . import limits_pin
+from .heartbeat import Heartbeat
+from .journal import Journal, State
+from .model import ClaudeModel
+from .scribe import Scribe
+from .orb_veto import OrbVetoModel, Vetoer
+from .team import TeamModel, Team
+from .snapshot import fetch_ib_daily
+
+CLIENT_ID = 8  # 1-7 are taken in the lab (see its AGENTS.md)
+SYMBOL = "SPY"
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--once", action="store_true", help="poll once, handle the new bars, exit")
+    parser.add_argument("--dry-run", action="store_true", help="ask the model and gate, but send no orders")
+    parser.add_argument("--model", default=None, help="Claude model for claude -p (default: the CLI's default)")
+    parser.add_argument("--team", action="store_true",
+                        help="ask the analyst, risk manager and devil's advocate (.claude/agents) before the trader decides")
+    parser.add_argument("--regime-gate", action="store_true",
+                        help="wake the model only on trending bars (plus every safety case: a held long, open orders, a fill, "
+                             "the exit window); see desk/regime.py. Default: every bar reaches the model")
+    parser.add_argument("--orb-veto", action="store_true",
+                        help="the lab's opening_range_breakout proposes every trade; Claude may only veto one, with a reason "
+                             "(desk/orb_veto.py). Cannot be combined with --team or --regime-gate")
+    args = parser.parse_args()
+    if args.orb_veto and (args.team or args.regime_gate):
+        parser.error("--orb-veto replaces the trader, so it cannot be combined with --team or --regime-gate")
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    ib = connect_paper(IB, client_id=CLIENT_ID)  # refuses non-paper port, host or account
+    try:
+        contract = Stock(SYMBOL, "SMART", "USD")
+        ib.qualifyContracts(contract)
+        risk = Risk.from_file()
+        broker = Broker(ib, f"live:desk:{SYMBOL}", dry_run=args.dry_run, risk=risk)
+        trader = ClaudeModel(model=args.model)
+        model = TeamModel(trader, Team(model=args.model)) if args.team else trader
+        if args.orb_veto:
+            model = OrbVetoModel(Vetoer(model=args.model))
+        Heartbeat(ib=ib, contract=contract, feed=BarFeed(ib, contract), model=model,
+                  executor=Executor(ib, broker, contract), broker=broker, risk=risk, journal=Journal(),
+                  state=State.load(), symbol=SYMBOL, fetch_daily=lambda: fetch_ib_daily(ib, contract),
+                  lab_journal=LabJournal(JOURNAL_PATH), limits_check=limits_pin.verify,
+                  scribe=Scribe(Journal(), model=args.model), regime_gate=args.regime_gate).run(once=args.once)
+    finally:
+        ib.disconnect()
+
+
+if __name__ == "__main__":
+    main()
